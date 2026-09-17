@@ -50,7 +50,7 @@ plugin-candy:
 candy-skill:
     skill:
         name: candy
-        family: candy
+        family: candy-cli
         owner: plugin-candy
         description: |-
             `charly candy set` / `charly candy add-<fmt>` — mutate a candy's charly.yml safely
