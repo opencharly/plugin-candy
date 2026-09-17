@@ -77,4 +77,3 @@ candy-skill:
 
             - `/charly-image:layer` — candy authoring (plan steps, services, packages).
             - `/charly-image:image` — box composition and charly.yml shapes.
-            - `/charly-authoring:authoring` — the box-level authoring verbs.
