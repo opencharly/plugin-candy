@@ -31,6 +31,13 @@ plugin-candy:
             providers:
                 - command:candy
         plan:
+            - check: the candy-skill skill entity is present in this candy's manifest (fails if the entity is removed)
+              id: candy-skill-present
+              context:
+                - build
+              command: |
+                  command: grep -q '^candy-skill:' charly.yml
+                  in_container: false
             - # ADE build-context check: a deterministic check that does NOT depend on a live deployment —
               # a trivial build-context `plugin: command` (the built-in command CHECK verb) running `true`,
               # proving the host can build the module. candy is compiled-in and self-contained (it owns its
