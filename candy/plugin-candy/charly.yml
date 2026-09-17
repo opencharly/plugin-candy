@@ -31,6 +31,11 @@ plugin-candy:
             providers:
                 - command:candy
         plan:
+            - check: the candy-skill skill entity is present in this candy's manifest (fails if the entity is removed)
+              id: candy-skill-present
+              context:
+                - build
+              command: "grep -q '^candy-skill:' charly.yml"
             - # ADE build-context check: a deterministic check that does NOT depend on a live deployment —
               # a trivial build-context `plugin: command` (the built-in command CHECK verb) running `true`,
               # proving the host can build the module. candy is compiled-in and self-contained (it owns its
@@ -41,3 +46,39 @@ plugin-candy:
               context:
                 - build
               command: "true"
+
+candy-skill:
+    skill:
+        name: candy
+        family: candy
+        owner: plugin-candy
+        description: |-
+            `charly candy set` / `charly candy add-<fmt>` — mutate a candy's charly.yml safely
+            (set a dot-path value, or append packages to a distro-format section). Use instead
+            of hand-editing candy manifests.
+        triggers:
+            - "`charly candy` / candy set / candy add-pac/add-deb/add-rpm / edit a candy manifest"
+        content: |
+            # charly candy — safe candy-manifest mutation
+
+            `charly candy` mutates a candy's `charly.yml` safely, descending into the entity's
+            `candy:` body. Served by `candy/plugin-candy` (`command:candy`).
+
+            ## Command tree
+
+            - `charly candy set <name> <path> <value>` — set a dot-path value on
+              `candy/<name>/charly.yml` (e.g. a tunable or a nested field).
+            - `charly candy add-<fmt> <name> <pkg…>` — append packages to the distro-format
+              section `<fmt>` (e.g. `add-pac`, `add-deb`, `add-rpm`). The verb set derives from
+              `sectionDistroPath`, so it cannot drift from the mapped formats.
+
+            ## When to use it
+
+            To change a candy manifest programmatically instead of hand-editing YAML — the
+            mutation respects the compact node form (`<name>: {candy: {...}}`) and the
+            schema, so it cannot produce a malformed manifest.
+
+            ## Cross-References
+
+            - `/charly-image:layer` — candy authoring (plan steps, services, packages).
+            - `/charly-image:image` — box composition and charly.yml shapes.
