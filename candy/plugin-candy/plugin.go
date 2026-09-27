@@ -19,6 +19,7 @@
 package candy
 
 import (
+	"embed"
 	"fmt"
 	"os"
 
@@ -26,16 +27,20 @@ import (
 	pb "github.com/opencharly/spec/proto"
 )
 
+//go:embed schema/*.cue
+var schemaFS embed.FS
+
 // NewProvider returns the candy provider.
 func NewProvider() pb.ProviderServer { return &provider{} }
 
 // NewMeta advertises command:candy — the COMPILED-IN registry path resolves it (registerCompiledPlugin
-// → resolve(ClassCommand,"candy") → dispatchInProcCommand → Invoke(OpRun)) — plus the self-contained
-// doc schema, via sdk.NewMeta.
+// → resolve(ClassCommand,"candy") → dispatchInProcCommand → Invoke(OpRun)) — plus this plugin's OWN
+// self-contained CUE schema (schema/candy.cue, embedded via schemaFS) documenting its command +
+// subcommand surface, served over Describe. There is NO schema-less plugin.
 func NewMeta() pb.PluginMetaServer {
 	return sdk.NewMeta("2026.181.0001",
 		[]sdk.ProvidedCapability{{Class: "command", Word: "candy"}},
-		nil)
+		schemaFS)
 }
 
 // CliMain is the CLI entrypoint (the out-of-process placement + the shared entry). candy is
