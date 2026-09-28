@@ -1,5 +1,7 @@
+version: 2026.232.0520
 plugin-candy:
     candy:
+        version: 2026.181.0001
         description: |-
             COMPILED-IN charly COMMAND-class plugin (command:candy) OWNING the entire `charly candy`
             CLI — the TOP-LEVEL candy-manifest authoring surface (set / add-rpm / add-deb / add-pac /
@@ -44,6 +46,7 @@ plugin-candy:
               context:
                 - build
               command: "true"
+
 candy-skill:
     skill:
         name: candy
