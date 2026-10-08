@@ -88,7 +88,7 @@ func inProject(t *testing.T, root string, fn func()) {
 
 // TestParamsWritesTheProjectionThePipelineReturned is the happy path: the verb derives the three
 // paths from the candy's own directory, calls the pipeline, and writes its bytes unchanged.
-func TestParamsWritesTheGeneratedFileAndRetagsIt(t *testing.T) {
+func TestParamsWritesTheProjectionThePipelineReturned(t *testing.T) {
 	withStubPipeline(t, stubProjection)
 	root := candyFixture(t, "", false)
 	inProject(t, root, func() {
@@ -211,7 +211,7 @@ func TestParamsCheckOnAMissingProjectionNamesIt(t *testing.T) {
 // wrapper adds nothing and loses nothing — the bytes on disk are the pipeline's bytes — plus the retag
 // contract on real output. It needs the pinned release provisioned, so it skips VISIBLY, never
 // silently and never with a canned substitute.
-func TestParamsRealPipelineGeneratesFromTheCandysOwnSchema(t *testing.T) {
+func TestParamsRealPipelineRunsThroughTheVerb(t *testing.T) {
 	if os.Getenv("CHARLY_SKIP_CUE_PROVISION") != "" {
 		t.Skip("CHARLY_SKIP_CUE_PROVISION is set: the pinned cue toolchain is not provisioned here")
 	}
