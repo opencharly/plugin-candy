@@ -45,7 +45,7 @@ func addFormatWords() []string {
 }
 
 var candyUsage = `usage: charly candy <set <name> <path> <value> | ` +
-	strings.Join(addFormatWords(), "|") + ` <name> <pkg…>>`
+	strings.Join(addFormatWords(), "|") + ` <name> <pkg…> | params <name> [--check]>`
 
 // runCandyCLI dispatches the candy subcommand (the first token). set mutates a dot-path; add-<fmt>
 // appends packages to the distro-map section its alias targets.
@@ -63,6 +63,11 @@ func runCandyCLI(args []string) error {
 			return fmt.Errorf("usage: charly candy set <name> <path> <value>")
 		}
 		return candySet(rest[0], rest[1], rest[2])
+	case "params":
+		// Regenerate the candy's Go params from its own schema/*.cue (params.go). The
+		// published plugin pages name THIS command: it needs nothing but the charly
+		// binary, where the recipe it replaces needed a spec checkout and cue.
+		return runCandyParams(rest)
 	default:
 		// Dispatch every add-<fmt> verb from sectionDistroPath (the single source),
 		// so the set of verbs cannot drift from the set of mapped formats.
