@@ -1,42 +1,43 @@
 package candy
 
-// params_test.go — the `charly candy params` pipeline's arms: the concat+header, the retag, the
-// write-on-change, and above all the --check comparison, which is the drift gate a plugin repo's CI
-// runs. The wiring arms run against a STUB cue binary (deterministic, no network); the real
-// toolchain and the real schema are exercised by the last test, which skips VISIBLY when the pinned
-// release cannot be provisioned.
+// params_test.go — the `charly candy params` VERB's arms: the path derivation, the write-on-change
+// no-op, the error propagation, and above all the --check comparison, which is the drift gate a plugin
+// repo's CI runs.
+//
+// The PIPELINE's arms are deliberately NOT here. The pipeline is `spec/schemaparams`, and its seven
+// arms live with it (concat+header+retag, the emitted codegen module, the package name, the
+// relative-toolchain-path regression, the empty schema dir, a toolchain failure, and the real
+// provisioning arm). Re-testing them here would be a second copy of one behaviour — the thing this
+// wrap exists to delete — so the wiring arms stand in for the pipeline with a STUB, and the last arm
+// runs the REAL pipeline through the verb, which is the wrap's own end-to-end proof.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// stubCue writes an executable that stands in for `cue exp gengotypes`: it emits a fixed file in its
-// working directory, with a json-ONLY tag so the retag step has something to do.
-func stubCue(t *testing.T, body string) string {
+// withStubPipeline stands in for the pipeline for the duration of one test. The stub's output is
+// returned verbatim by the verb when it writes, so the arms can assert the file on disk is EXACTLY
+// what the pipeline returned — no transformation of the verb's own.
+func withStubPipeline(t *testing.T, out string) {
 	t.Helper()
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "cue")
-	script := "#!/bin/sh\ncat > cue_types_params_gen.go <<'EOF'\n" + body + "\nEOF\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return bin
+	orig := paramsPipeline
+	paramsPipeline = func(string, string, string) ([]byte, error) { return []byte(out), nil }
+	t.Cleanup(func() { paramsPipeline = orig })
 }
 
-// withStubCue swaps the toolchain resolver for the duration of one test.
-func withStubCue(t *testing.T, body string) {
+// withFailingPipeline makes the pipeline fail, to prove the verb surfaces the pipeline's error
+// instead of swallowing it (the pipeline's own arms assert WHICH errors it produces; this asserts
+// they reach the caller intact).
+func withFailingPipeline(t *testing.T, err error) {
 	t.Helper()
-	orig := cueBinary
-	cueBinary = func() (string, error) { return stubCue(t, body), nil }
-	t.Cleanup(func() { cueBinary = orig })
+	orig := paramsPipeline
+	paramsPipeline = func(string, string, string) ([]byte, error) { return nil, err }
+	t.Cleanup(func() { paramsPipeline = orig })
 }
-
-// stubBody deliberately ends WITHOUT a trailing newline: the stub heredoc supplies one, so the
-// file the pipeline reads is the body plus exactly one newline (what gengotypes emits).
-const stubBody = "package params\n\ntype Foo struct {\n\tName string `json:\"name\"`\n}"
 
 // candyFixture lays out a minimal candy project: <root>/candy/<name>/schema/foo.cue plus whatever
 // the caller wants at candy/<name>/params/cue_types_gen.go, and returns the project root.
@@ -62,9 +63,9 @@ func candyFixture(t *testing.T, committed string, committedSet bool) string {
 	return root
 }
 
-// expectedPipelineOutput is what the stub pipeline must produce for stubBody: the retag doubles the
-// json-only tag with a yaml tag and then adds ,omitempty to that bare yaml key.
-const expectedPipelineOutput = "package params\n\ntype Foo struct {\n\tName string `yaml:\"name,omitempty\" json:\"name\"`\n}\n"
+// stubProjection is what the stub pipeline returns — shaped like real pipeline output (a retagged
+// struct), so the arms compare against something a reader recognises as generator output.
+const stubProjection = "package params\n\ntype Foo struct {\n\tName string `yaml:\"name,omitempty\" json:\"name\"`\n}\n"
 
 // inProject runs fn with the process cwd at root — the CLI resolves candies from the project root,
 // exactly as the host invokes it.
@@ -85,10 +86,10 @@ func inProject(t *testing.T, root string, fn func()) {
 	fn()
 }
 
-// TestParamsWritesTheGeneratedFileAndRetagsIt is the happy path: the pipeline concatenates the
-// candy's schema, runs the toolchain, normalizes the tags and writes the projection.
+// TestParamsWritesTheProjectionThePipelineReturned is the happy path: the verb derives the three
+// paths from the candy's own directory, calls the pipeline, and writes its bytes unchanged.
 func TestParamsWritesTheGeneratedFileAndRetagsIt(t *testing.T) {
-	withStubCue(t, stubBody)
+	withStubPipeline(t, stubProjection)
 	root := candyFixture(t, "", false)
 	inProject(t, root, func() {
 		if err := runCandyParams([]string{"demo"}); err != nil {
@@ -99,8 +100,8 @@ func TestParamsWritesTheGeneratedFileAndRetagsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the verb did not write the projection: %v", err)
 	}
-	if string(got) != expectedPipelineOutput {
-		t.Fatalf("projection =\n%q\nwant\n%q", got, expectedPipelineOutput)
+	if string(got) != stubProjection {
+		t.Fatalf("projection =\n%q\nwant\n%q", got, stubProjection)
 	}
 }
 
@@ -109,7 +110,7 @@ func TestParamsWritesTheGeneratedFileAndRetagsIt(t *testing.T) {
 // cannot fail is the defect this campaign has produced five times, so this arm mutates the file and
 // watches the check go red.
 func TestParamsCheckGoesRedOnDrift(t *testing.T) {
-	withStubCue(t, stubBody)
+	withStubPipeline(t, stubProjection)
 	root := candyFixture(t, "package params\n\n// stale, hand-edited\n", true)
 	inProject(t, root, func() {
 		err := runCandyParams([]string{"demo", "--check"})
@@ -133,8 +134,8 @@ func TestParamsCheckGoesRedOnDrift(t *testing.T) {
 // TestParamsCheckPassesOnACurrentFile is the other half: the same comparison must be GREEN when the
 // committed file IS the pipeline output, or the gate would be useless.
 func TestParamsCheckPassesOnACurrentFile(t *testing.T) {
-	withStubCue(t, stubBody)
-	root := candyFixture(t, expectedPipelineOutput, true)
+	withStubPipeline(t, stubProjection)
+	root := candyFixture(t, stubProjection, true)
 	inProject(t, root, func() {
 		if err := runCandyParams([]string{"demo", "--check"}); err != nil {
 			t.Fatalf("--check failed on a current projection: %v", err)
@@ -145,8 +146,8 @@ func TestParamsCheckPassesOnACurrentFile(t *testing.T) {
 // TestParamsRegenerationIsANoOp: a clean regeneration must leave the file byte-identical, because
 // every consumer's CI asserts exactly that.
 func TestParamsRegenerationIsANoOp(t *testing.T) {
-	withStubCue(t, stubBody)
-	root := candyFixture(t, expectedPipelineOutput, true)
+	withStubPipeline(t, stubProjection)
+	root := candyFixture(t, stubProjection, true)
 	out := filepath.Join(root, "candy", "demo", "params", "cue_types_gen.go")
 	before, err := os.Stat(out)
 	if err != nil {
@@ -166,28 +167,33 @@ func TestParamsRegenerationIsANoOp(t *testing.T) {
 	}
 }
 
-// TestParamsEmptySchemaDirFailsLoudly: a candy with no schema must say so, not generate an empty file.
-func TestParamsEmptySchemaDirFailsLoudly(t *testing.T) {
-	withStubCue(t, stubBody)
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "candy", "demo", "schema"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+// TestParamsPipelineErrorsReachTheCaller: the verb must not swallow a pipeline failure. The EMPTY
+// schema directory is the case that mattered in practice ("no *.cue files"), and it is asserted
+// where the behaviour now lives — spec's TestGenerateWithCueRejectsAnEmptySchemaDir — so this arm
+// asserts the PROPAGATION, not the message: it fails the pipeline and requires the verb to return
+// that error unchanged rather than writing an empty projection over a good one.
+func TestParamsPipelineErrorsReachTheCaller(t *testing.T) {
+	sentinel := errors.New("no *.cue files in /tmp/nope")
+	withFailingPipeline(t, sentinel)
+	root := candyFixture(t, "", false)
 	inProject(t, root, func() {
 		err := runCandyParams([]string{"demo"})
 		if err == nil {
-			t.Fatal("an empty schema directory produced no error")
+			t.Fatal("a failing pipeline produced no error")
 		}
-		if !strings.Contains(err.Error(), "no *.cue files") {
-			t.Fatalf("error must say the schema dir is empty, got: %v", err)
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("the verb must surface the pipeline's own error, got: %v", err)
 		}
 	})
+	if _, statErr := os.Stat(filepath.Join(root, "candy", "demo", "params", "cue_types_gen.go")); statErr == nil {
+		t.Fatal("a failing pipeline still wrote a projection")
+	}
 }
 
 // TestParamsCheckOnAMissingProjectionNamesIt: --check on a candy that has never been generated must
 // fail with the file named, not with a nil error.
 func TestParamsCheckOnAMissingProjectionNamesIt(t *testing.T) {
-	withStubCue(t, stubBody)
+	withStubPipeline(t, stubProjection)
 	root := candyFixture(t, "", false)
 	inProject(t, root, func() {
 		err := runCandyParams([]string{"demo", "--check"})
@@ -200,10 +206,11 @@ func TestParamsCheckOnAMissingProjectionNamesIt(t *testing.T) {
 	})
 }
 
-// TestParamsRealPipelineGeneratesFromTheCandysOwnSchema runs the REAL pinned toolchain over this
-// candy's own schema/candy.cue. It proves the end-to-end pipeline (concat + header + gengotypes +
-// retag) rather than the wiring alone. It needs the pinned release to be provisioned, so it skips
-// VISIBLY — never silently, and never with a canned substitute — when that is impossible.
+// TestParamsRealPipelineRunsThroughTheVerb is the WRAP's end-to-end proof: the verb's own path
+// derivation and a REAL provisioned toolchain, over this candy's own schema/candy.cue. It asserts the
+// wrapper adds nothing and loses nothing — the bytes on disk are the pipeline's bytes — plus the retag
+// contract on real output. It needs the pinned release provisioned, so it skips VISIBLY, never
+// silently and never with a canned substitute.
 func TestParamsRealPipelineGeneratesFromTheCandysOwnSchema(t *testing.T) {
 	if os.Getenv("CHARLY_SKIP_CUE_PROVISION") != "" {
 		t.Skip("CHARLY_SKIP_CUE_PROVISION is set: the pinned cue toolchain is not provisioned here")
