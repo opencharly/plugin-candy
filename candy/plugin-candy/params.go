@@ -12,12 +12,15 @@ package candy
 // pinned `cue` CLI is fetched checksum-verified into the charly cache, and the pipeline runs from
 // the schema's own declarations.
 //
-// THE PIPELINE, and where each step's contract lives:
-//  1. concatenate candy/<name>/schema/*.cue           -> spec/schemaconcat  (the ONE concat contract)
-//  2. head it `package params` + `@go(params)`         -> this file (the header IS the contract)
-//  3. `cue exp gengotypes`                             -> cuetoolchain (the ONE pin)
-//  4. double every json tag with a yaml tag            -> spec/schemaretag  (the ONE retag contract)
-//  5. write candy/<name>/params/cue_types_gen.go       -> this file
+// THE PIPELINE IS NOT HERE. It is `spec/schemaparams.Generate` — ONE public entry point that
+// sequences the three step contracts (`schemaconcat` for the concatenation, `cuetoolchain` for the
+// pin and its fetcher, `schemaretag` for the tag normalization) behind one call. This verb is a THIN
+// WRAPPER over it: it derives the paths, calls the pipeline, and does the write-or-compare.
+//
+// That is the R3 point. Before `schemaparams` this file carried its own copy of concat → header →
+// `cue exp gengotypes` → retag, and spec's own generator carried a second copy of the same sequence
+// — two implementations of one behaviour that could drift. The copy is DELETED here, not wrapped:
+// a wrapper that kept its own sequence would have been a THIRD copy wearing the name of a fix.
 //
 // --check compares the COMMITTED file against the pipeline's OUTPUT (never a grep, and never a hash
 // of a previous run): that is the only comparison that can catch a generated file gone stale, which
@@ -26,14 +29,12 @@ package candy
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/opencharly/sdk/kit"
 	"github.com/opencharly/spec/cuetoolchain"
-	"github.com/opencharly/spec/schemaconcat"
-	"github.com/opencharly/spec/schemaretag"
+	"github.com/opencharly/spec/schemaparams"
 )
 
 const paramsUsage = `usage: charly candy params <name> [--check]
@@ -152,47 +153,27 @@ func runCandyParams(args []string) error {
 	return nil
 }
 
-// cueBinary resolves the pinned toolchain. It is a package var so the pipeline's wiring — the
-// concat, the header, the retag, the write and the --check comparison — can be tested with a stub
-// binary (params_test.go) without provisioning the release; the REAL resolver is exercised by
-// TestParamsRealPipelineGeneratesFromTheCandysOwnSchema, which skips visibly when the toolchain
-// cannot be provisioned.
-var cueBinary = ensureCue
+// paramsPipeline IS the schema→Go pipeline — `spec/schemaparams.Generate`, whose contract is
+// identical (schemaDir, pkg, cueDir) and which provisions the pinned toolchain into cueDir itself.
+// It is a package var so THIS verb's own wiring — the path derivation, the write-on-change no-op,
+// the --check comparison — is testable without a schema or a network (params_test.go).
+//
+// The pipeline's own arms are NOT duplicated here. They live with the pipeline, in
+// spec/schemaparams_test.go: concat+header+retag, the emitted codegen module, the package name, the
+// relative-toolchain-path regression, the EMPTY schema directory (`no *.cue files`), a toolchain
+// failure, and the real provisioning arm. Seven arms in one place, because the behaviour has one
+// home; a second copy here could only drift from it.
+var paramsPipeline = schemaparams.Generate
 
-// generateParams runs the whole pipeline and returns the file the schema produces.
+// generateParams returns the file the schema produces. The toolchain is provisioned inside
+// schemaparams.Generate, so the pin and the checksum are shared with spec's own generator and there
+// is no path by which this verb runs a different `cue`.
 func generateParams(schemaDir, pkg string) ([]byte, error) {
-	body, files, err := schemaconcat.ConcatSchema(os.DirFS(schemaDir), ".", nil)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", schemaDir, err)
-	}
-	if len(files) == 0 {
-		return nil, fmt.Errorf("no *.cue files in %s", schemaDir)
-	}
-	cueBin, err := cueBinary()
+	cueDir, err := cueCacheDir()
 	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp("", "charly-candy-params-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmp)
-	// The header is the concat contract's tail: `package <pkg>` + the file-level @go(<pkg>)
-	// attribute gengotypes reads to name the Go package.
-	src := "package " + pkg + "\n\n@go(" + pkg + ")\n\n" + body
-	if err := os.WriteFile(filepath.Join(tmp, pkg+".cue"), []byte(src), 0o644); err != nil {
-		return nil, err
-	}
-	cmd := exec.Command(cueBin, "exp", "gengotypes", ".")
-	cmd.Dir = tmp
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("cue exp gengotypes failed in %s: %w\n%s", tmp, err, strings.TrimSpace(string(out)))
-	}
-	gen, err := os.ReadFile(filepath.Join(tmp, "cue_types_"+pkg+"_gen.go"))
-	if err != nil {
-		return nil, fmt.Errorf("gengotypes produced no cue_types_%s_gen.go: %w", pkg, err)
-	}
-	return schemaretag.Normalize(gen), nil
+	return paramsPipeline(schemaDir, pkg, cueDir)
 }
 
 // cueCacheDir is where the provisioned toolchain lives: one directory per pinned version, so a pin
@@ -203,22 +184,4 @@ func cueCacheDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(base, "charly", "cue", cuetoolchain.Version), nil
-}
-
-// ensureCue returns a path to the pinned `cue` CLI, provisioning it on first use. The pin, its
-// checksum, the arch rules, the verification-BEFORE-extraction and the atomic write all live in
-// spec/cuetoolchain — the ONE home for the toolchain, shared with spec's own bootstrap-cue task — so
-// this verb cannot run a different cue than the module's generator does. Every failure is loud and
-// names the pin and the remedy: never a silent fallback to whatever `cue` is on PATH.
-func ensureCue() (string, error) {
-	dir, err := cueCacheDir()
-	if err != nil {
-		return "", err
-	}
-	fmt.Printf("charly candy params: ensuring %s in %s\n", cuetoolchain.Pin(), dir)
-	bin, err := cuetoolchain.Ensure(dir)
-	if err != nil {
-		return "", fmt.Errorf("charly candy params: %w", err)
-	}
-	return bin, nil
 }
