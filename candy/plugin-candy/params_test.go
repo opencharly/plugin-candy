@@ -4,12 +4,12 @@ package candy
 // no-op, the error propagation, and above all the --check comparison, which is the drift gate a plugin
 // repo's CI runs.
 //
-// The PIPELINE's arms are deliberately NOT here. The pipeline is `spec/schemaparams`, and its seven
-// arms live with it (concat+header+retag, the emitted codegen module, the package name, the
-// relative-toolchain-path regression, the empty schema dir, a toolchain failure, and the real
-// provisioning arm). Re-testing them here would be a second copy of one behaviour — the thing this
-// wrap exists to delete — so the wiring arms stand in for the pipeline with a STUB, and the last arm
-// runs the REAL pipeline through the verb, which is the wrap's own end-to-end proof.
+// The PIPELINE's arms are deliberately NOT here. The pipeline is `spec/schemaparams`, and its arms
+// live with it (byte-identity against the pinned `cue exp gengotypes`, the import → Go-home
+// reference, the package name, the file filter, and the empty schema dir). Re-testing them here
+// would be a second copy of one behaviour — the thing this wrap exists to delete — so the wiring
+// arms stand in for the pipeline with a STUB, and the last arm runs the REAL in-process pipeline
+// through the verb, which is the wrap's own end-to-end proof.
 
 import (
 	"errors"
@@ -25,7 +25,7 @@ import (
 func withStubPipeline(t *testing.T, out string) {
 	t.Helper()
 	orig := paramsPipeline
-	paramsPipeline = func(string, string, string) ([]byte, error) { return []byte(out), nil }
+	paramsPipeline = func(string, string) ([]byte, error) { return []byte(out), nil }
 	t.Cleanup(func() { paramsPipeline = orig })
 }
 
@@ -35,7 +35,7 @@ func withStubPipeline(t *testing.T, out string) {
 func withFailingPipeline(t *testing.T, err error) {
 	t.Helper()
 	orig := paramsPipeline
-	paramsPipeline = func(string, string, string) ([]byte, error) { return nil, err }
+	paramsPipeline = func(string, string) ([]byte, error) { return nil, err }
 	t.Cleanup(func() { paramsPipeline = orig })
 }
 
@@ -169,7 +169,7 @@ func TestParamsRegenerationIsANoOp(t *testing.T) {
 
 // TestParamsPipelineErrorsReachTheCaller: the verb must not swallow a pipeline failure. The EMPTY
 // schema directory is the case that mattered in practice ("no *.cue files"), and it is asserted
-// where the behaviour now lives — spec's TestGenerateWithCueRejectsAnEmptySchemaDir — so this arm
+// where the behaviour now lives — spec's TestGenerateRejectsAnEmptySchemaDir — so this arm
 // asserts the PROPAGATION, not the message: it fails the pipeline and requires the verb to return
 // that error unchanged rather than writing an empty projection over a good one.
 func TestParamsPipelineErrorsReachTheCaller(t *testing.T) {
@@ -207,24 +207,21 @@ func TestParamsCheckOnAMissingProjectionNamesIt(t *testing.T) {
 }
 
 // TestParamsRealPipelineRunsThroughTheVerb is the WRAP's end-to-end proof: the verb's own path
-// derivation and a REAL provisioned toolchain, over this candy's own schema/candy.cue. It asserts the
-// wrapper adds nothing and loses nothing — the bytes on disk are the pipeline's bytes — plus the retag
-// contract on real output. It needs the pinned release provisioned, so it skips VISIBLY, never
-// silently and never with a canned substitute.
+// derivation and the REAL in-process pipeline, over this candy's own schema/candy.cue. It asserts the
+// wrapper adds nothing and loses nothing — the bytes are the pipeline's bytes — plus the retag
+// contract on real output. Generation needs no toolchain and no network, so a failure here is a
+// failure, never a skip.
 func TestParamsRealPipelineRunsThroughTheVerb(t *testing.T) {
-	if os.Getenv("CHARLY_SKIP_CUE_PROVISION") != "" {
-		t.Skip("CHARLY_SKIP_CUE_PROVISION is set: the pinned cue toolchain is not provisioned here")
-	}
 	schemaDir, err := filepath.Abs("schema")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(schemaDir, "candy.cue")); err != nil {
-		t.Skipf("no schema/candy.cue to generate from: %v", err)
+		t.Fatalf("no schema/candy.cue to generate from: %v", err)
 	}
 	got, err := generateParams(schemaDir, "params")
 	if err != nil {
-		t.Skipf("the pinned cue toolchain could not be provisioned here (%v) — this arm is skipped, not faked", err)
+		t.Fatalf("in-process generation failed: %v", err)
 	}
 	src := string(got)
 	if !strings.Contains(src, "package params") {
