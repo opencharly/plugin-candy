@@ -27,13 +27,15 @@ description: '`charly candy set` / `charly candy add-<fmt>` — mutate a candy''
 - `charly candy params <name> [--check]` — regenerate
   `candy/<name>/params/cue_types_gen.go` from `candy/<name>/schema/*.cue`. This is
   the pipeline's ONLY documented entry point: concatenate the schema (the
-  `schemaconcat` contract), head it `package params` + `@go(params)`, run the pinned
-  `cue exp gengotypes` (the `cuetoolchain` pin — provisioned checksum-verified into
-  the charly cache, so no `cue` install and no checkout are needed), then double
-  every json tag with a yaml tag (the `schemaretag` contract). `--check` writes
-  nothing: it exits non-zero when the committed file differs from that pipeline
-  OUTPUT, which is the drift gate a plugin repo's CI should run. `--schema/--pkg/--out`
-  is the explicit form for a schema that is not a candy's.
+  `schemaconcat` contract), head it `package params` + `@go(params)`, compose it as one
+  offline CUE module instance and generate the Go structs in-process through the CUE Go
+  API (the `schemacompose` + in-process-generator contracts — no `cue` CLI, no checkout
+  and no toolchain provisioning on this leg; the pinned `cue` CLI remains the authoring
+  tool for schema sources), then double every json tag with a yaml tag (the
+  `schemaretag` contract). `--check` writes nothing: it exits non-zero when the
+  committed file differs from that pipeline OUTPUT, which is the drift gate a plugin
+  repo's CI should run. `--schema/--pkg/--out` is the explicit form for a schema that is
+  not a candy's.
 
 ## When to use it
 

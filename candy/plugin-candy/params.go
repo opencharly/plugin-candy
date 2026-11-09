@@ -8,14 +8,16 @@ package candy
 // published page may only name commands that work with the `charly` binary alone. Before this verb
 // the only way to regenerate was a checkout-relative recipe (`cd` into a spec checkout, run
 // `internal/schemagen -mode=concat`, run `cue exp gengotypes`, run `-mode=retag`), so the pages had
-// to publish either a forbidden path or nothing. The verb provisions its own toolchain instead: the
-// pinned `cue` CLI is fetched checksum-verified into the charly cache, and the pipeline runs from
-// the schema's own declarations.
+// to publish either a forbidden path or nothing. The verb generates in-process instead: the schema
+// is concatenated, composed as one CUE module instance offline, and projected to Go through the CUE
+// Go API — no `cue` CLI, no checkout, and no toolchain provisioning on the generation leg. The
+// pinned `cue` CLI remains the authoring tool for editing schema sources.
 //
 // THE PIPELINE IS NOT HERE. It is `spec/schemaparams.Generate` — ONE public entry point that
-// sequences the three step contracts (`schemaconcat` for the concatenation, `cuetoolchain` for the
-// pin and its fetcher, `schemaretag` for the tag normalization) behind one call. This verb is a THIN
-// WRAPPER over it: it derives the paths, calls the pipeline, and does the write-or-compare.
+// sequences the step contracts (`schemaconcat` for the concatenation, `schemacompose` for the one
+// offline compose, the in-process CUE-API generator, `schemaretag` for the tag normalization) behind
+// one call. This verb is a THIN WRAPPER over it: it derives the paths, calls the pipeline, and does
+// the write-or-compare.
 //
 // That is the R3 point. Before `schemaparams` this file carried its own copy of concat → header →
 // `cue exp gengotypes` → retag, and spec's own generator carried a second copy of the same sequence
@@ -33,7 +35,6 @@ import (
 	"strings"
 
 	"github.com/opencharly/sdk/kit"
-	"github.com/opencharly/spec/cuetoolchain"
 	"github.com/opencharly/spec/schemaparams"
 )
 
@@ -41,8 +42,9 @@ const paramsUsage = `usage: charly candy params <name> [--check]
        charly candy params --schema <dir> --pkg <params> --out <file> [--check]
 
 Regenerate a plugin candy's Go params from its own schema/*.cue — nothing but the
-charly binary is needed: the pinned cue CLI (` + cuetoolchain.Version + `, checksum-verified) is
-provisioned into the charly cache on first use.
+charly binary is needed: the schema is composed and generated in-process through the
+CUE Go API, so there is no cue install, no checkout, and no toolchain provisioning.
+The pinned cue CLI remains the authoring tool for schema sources.
 
   <name>            the candy whose candy/<name>/schema/*.cue is the source and whose
                     candy/<name>/params/cue_types_gen.go is regenerated
@@ -154,34 +156,20 @@ func runCandyParams(args []string) error {
 }
 
 // paramsPipeline IS the schema→Go pipeline — `spec/schemaparams.Generate`, whose contract is
-// identical (schemaDir, pkg, cueDir) and which provisions the pinned toolchain into cueDir itself.
+// (schemaDir, pkg): concatenate, compose ONE offline module instance, generate in-process, retag.
 // It is a package var so THIS verb's own wiring — the path derivation, the write-on-change no-op,
-// the --check comparison — is testable without a schema or a network (params_test.go).
+// the --check comparison — is testable without a schema (params_test.go).
 //
 // The pipeline's own arms are NOT duplicated here. They live with the pipeline, in
-// spec/schemaparams_test.go: concat+header+retag, the emitted codegen module, the package name, the
-// relative-toolchain-path regression, the EMPTY schema directory (`no *.cue files`), a toolchain
-// failure, and the real provisioning arm. Seven arms in one place, because the behaviour has one
-// home; a second copy here could only drift from it.
+// spec/schemaparams_test.go: byte-identity against the pinned `cue exp gengotypes`, the imported
+// definition emitted through its Go home, the package name, the file filter, and the EMPTY schema
+// directory (`no *.cue files`). One home, because the behaviour has one implementation; a second copy
+// here could only drift from it.
 var paramsPipeline = schemaparams.Generate
 
-// generateParams returns the file the schema produces. The toolchain is provisioned inside
-// schemaparams.Generate, so the pin and the checksum are shared with spec's own generator and there
-// is no path by which this verb runs a different `cue`.
+// generateParams returns the file the schema produces. Generation is in-process inside
+// schemaparams.Generate, so this verb and spec's own generator run the same code and there is no
+// path by which it could run a different `cue`.
 func generateParams(schemaDir, pkg string) ([]byte, error) {
-	cueDir, err := cueCacheDir()
-	if err != nil {
-		return nil, err
-	}
-	return paramsPipeline(schemaDir, pkg, cueDir)
-}
-
-// cueCacheDir is where the provisioned toolchain lives: one directory per pinned version, so a pin
-// bump cannot be served a stale binary from the previous one.
-func cueCacheDir() (string, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "charly", "cue", cuetoolchain.Version), nil
+	return paramsPipeline(schemaDir, pkg)
 }
